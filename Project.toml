@@ -1,0 +1,13 @@
+name = "COVID19SchoolReopening"
+uuid = "edf7e6e8-5edc-4383-9e2b-e92e9a7b41d6"
+authors = ["Alfonso Landeros <alanderos@ucla.edu> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1.5"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
