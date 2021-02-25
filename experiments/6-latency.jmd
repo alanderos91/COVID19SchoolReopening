@@ -7,11 +7,11 @@ weave_options:
 ```{julia; results="hidden"}
 using LinearAlgebra
 using DifferentialEquations, DiffEqCallbacks
-using COVID19SchoolDynamics
+using COVID19SchoolReopening
 using ProgressMeter
 using PyPlot, LaTeXStrings
 
-const CVD = COVID19SchoolDynamics
+const CSR = COVID19SchoolReopening
 
 rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
 rcParams["axes.grid"] = true
@@ -23,7 +23,7 @@ rcParams["font.size"] = 12
 ```{julia; results="hidden"}
 # length of simulation, translated from months to days (model time scale)
 months = 6
-days = months * CVD.DAYS_PER_MONTH
+days = months * CSR.DAYS_PER_MONTH
 weeks = Int(round(Int, days / 7))
 tspan = (0, days*1.0);
 ```

@@ -8,13 +8,13 @@ weave_options:
 
 ```{julia; results="hidden"}
 using LinearAlgebra
-using DifferentialEquations, COVID19SchoolDynamics
+using DifferentialEquations, COVID19SchoolReopening
 using PyPlot, LaTeXStrings
 
 # need to import mpltern to get access to ternary plots
 PyPlot.PyCall.pyimport("mpltern")
 
-const CVD = COVID19SchoolDynamics
+const CSR = COVID19SchoolReopening
 
 rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
 rcParams["axes.grid"] = true
@@ -26,7 +26,7 @@ rcParams["font.size"] = 12
 ```{julia; results="hidden"}
 # length of simulation, translated from months to days (model time scale)
 months = 6
-days = months * CVD.DAYS_PER_MONTH
+days = months * CSR.DAYS_PER_MONTH
 tspan = (0, days*1.0);
 ```
 
