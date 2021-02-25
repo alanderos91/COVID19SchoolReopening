@@ -1,0 +1,381 @@
+---
+title: Sensitivity to initial conditions
+weave_options:
+    fig_ext: .svg
+---
+
+# Packages
+
+```{julia; results="hidden"}
+using LinearAlgebra
+using DifferentialEquations, DiffEqCallbacks
+using COVID19SchoolDynamics
+using ProgressMeter
+using PyPlot, LaTeXStrings
+using CSV, DataFrames, Statistics
+
+const CVD = COVID19SchoolDynamics
+
+rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams["axes.grid"] = true
+rcParams["font.size"] = 12
+```
+
+# Model Parameters
+
+```{julia; results="hidden"}
+# length of simulation, translated from months to days (model time scale)
+months = 6
+days = months * CVD.DAYS_PER_MONTH
+weeks = Int(round(Int, days / 7))
+tspan = (0, days*1.0);
+```
+
+```{julia; results="hidden"}
+# assuming model time in days
+
+# cohort interaction, between 0 and 1
+α = 0.05 * ones(3, 3)
+α[1,1] = 1      # cohort 1
+α[2,2] = 1      # cohort 2
+α[3,3] = 1      # cohort 3
+
+# latent period, time between exposure time and beginning of infectious period
+σ = zeros(2)
+σ[1] = 1/(3)     # children, 3 days
+σ[2] = 1/(3)     # adults, 3 days
+
+# removal rate, 'recovery' from infectious state to non-infectious
+γ = zeros(2)
+γ[1] = 1/(4)    # child recovery rate, 4 days
+γ[2] = 1/(4)    # adult recovery rate, 4 days
+
+# baseline transmission rates
+β0 = 1.2
+F = [
+    0.1     0.25    # child to j
+    0.15    0.5     # adult to j
+]
+β = β0 * F
+
+# population: [children, adults]
+demographics = [22., 78.]
+total_infected = 2.0
+infected = [10., 90.]
+
+params = (α, σ, γ);
+```
+
+# Plot settings
+
+```{julia; results="hidden"}
+rcParams["axes.grid"] = false
+rcParams["axes.facecolor"] = "1.0"
+
+levels = 0:10:100
+bounds = levels
+cmap = get_cmap("viridis", length(bounds))
+cnorm = PyPlot.matplotlib.colors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N)
+```
+
+# Additional parameters
+
+```{julia; results="hidden"}
+# other parameters
+multiplier = 10.0
+
+# input - ranges for parameters we will vary
+proportion_children = range(0.0, 60.0, step=2.0)
+initial_infected = range(0.0, 10.0, step=0.5)
+m = length(proportion_children)
+n = length(initial_infected)
+
+# make sure x and y axis are set correctly later in plotting
+xrange = initial_infected
+yrange = proportion_children
+
+# output - prevalence I + R
+child_prevalence = [zeros(m, n) for _ in 1:2]
+adult_prevalence = [zeros(m, n) for _ in 1:2]
+```
+
+# Fig S5: Influence of demography and initial infected on prevalence (no testing)
+
+##### 1 cohort (full capacity)
+
+```{julia; echo=false, results="hidden"}
+nclasses = 2
+ncohorts = 1
+
+# create problem matrix
+prob_matrix = Array{Any}(undef, m, n)
+for (j, total_infected) in enumerate(initial_infected), (i, children) in enumerate(proportion_children)
+    prob_matrix[i,j] = make_model_instance(nclasses, ncohorts, tspan, β, deepcopy(params),
+                mult=multiplier,
+                demographics=[children, 100-children],
+                total_infected=total_infected,
+                infected=infected,
+    )
+end
+
+@showprogress for (ix, prob) in enumerate(prob_matrix)
+    sol = solve(prob)
+    q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+    child_prevalence[1][ix] = sum(sol.u[end][i,1,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[1] == 0 ? 1.0 : q[1])
+    adult_prevalence[1][ix] = sum(sol.u[end][i,2,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[2] == 0 ? 1.0 : q[2])
+end
+```
+
+##### 2 cohorts (rotating)
+
+```{julia; echo=false, results="hidden"}
+nclasses = 2
+ncohorts = 2
+
+# create problem matrix
+prob_matrix = Array{Any}(undef, m, n)
+for (j, total_infected) in enumerate(initial_infected), (i, children) in enumerate(proportion_children)
+    prob_matrix[i,j] = make_model_instance(nclasses, ncohorts, tspan, β, deepcopy(params),
+                mult=multiplier,
+                demographics=[children, 100-children],
+                total_infected=total_infected,
+                infected=infected,
+    )
+end
+
+@showprogress for (ix, prob) in enumerate(prob_matrix)
+    sol = solve(prob, saveat=1.0)
+    q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+    child_prevalence[2][ix] = sum(sol.u[end][i,1,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[1] == 0 ? 1.0 : q[1])
+    adult_prevalence[2][ix] = sum(sol.u[end][i,2,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[2] == 0 ? 1.0 : q[2])
+end
+```
+
+```{julia; echo=false}
+# initialize figure
+fig, ax = plt.subplots(nrows=2, ncols=2)
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel("Proportion initially infected (%)")
+plt.ylabel("Children in population (%)")
+
+img = ax[1].contourf(xrange, yrange, child_prevalence[1], levels=levels, cmap=cmap)
+# ax[1].plot(2, demographics[1], "ro")
+# ax[1].plot(0.1, demographics[1], "wo")
+ax[1].set_title("Children - 1 cohort")
+
+ax[2].contourf(xrange, yrange, child_prevalence[2], levels=levels, cmap=cmap)
+# ax[2].plot(2, demographics[1], "ro")
+# ax[2].plot(0.1, demographics[1], "wo")
+ax[2].set_title("Children - 2 cohorts")
+
+ax[3].contourf(xrange, yrange, adult_prevalence[1], levels=levels, cmap=cmap)
+# ax[3].plot(2, demographics[1], "ro")
+# ax[3].plot(0.1, demographics[1], "wo")
+ax[3].set_title("Adults - 1 cohort")
+
+ax[4].contourf(xrange, yrange, adult_prevalence[2], levels=levels, cmap=cmap)
+# ax[4].plot(2, demographics[1], "ro")
+# ax[4].plot(0.1, demographics[1], "wo")
+ax[4].set_title("Adults - 2 cohorts")
+
+# add panel labels
+reindex = [1, 3, 2, 4]
+for i in eachindex(ax)
+    ax[i].text(-0.05, 1.3, string('A'+(reindex[i]-1)), transform=ax[i].transAxes,
+      fontsize=16, fontweight="bold", va="top", ha="right")
+    ax[i].xaxis.set_ticks(xrange[1]:1:xrange[end])
+    ax[i].yaxis.set_ticks(yrange[1]:10:yrange[end])
+end
+
+# settings for colorbar legend
+cb_ax = fig.add_axes([0.29, 0.02, 0.5, 0.03])
+cbar = fig.colorbar(img, cax=cb_ax, orientation="horizontal", label="Prevalence at 6 months (%)", norm=cnorm, boundaries=bounds)
+cbar.set_ticks(bounds)
+
+fig.tight_layout()
+
+PyPlot.savefig("../figures/S5_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S5_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Fig S6: Influence of demography and initial infected on prevalence (with testing)
+
+```{julia; results="hidden"}
+school_days = 1:1.0:5
+test_times = [(day-1) + 7*(week-1) + 1 for week in 1:weeks for day in school_days]
+sensitivity = 1.0
+isrotating = true
+```
+
+##### 1 cohort (full capacity)
+
+```{julia; echo=false, results="hidden"}
+nclasses = 2
+ncohorts = 1
+
+# create problem matrix
+prob_matrix = Array{Any}(undef, m, n)
+for (j, total_infected) in enumerate(initial_infected), (i, children) in enumerate(proportion_children)
+    prob_matrix[i,j] = make_model_instance(nclasses, ncohorts, tspan, β, deepcopy(params),
+                mult=multiplier,
+                demographics=[children, 100-children],
+                total_infected=total_infected,
+                infected=infected,
+    )
+end
+
+@showprogress for (ix, prob) in enumerate(prob_matrix)
+    cb_test = make_testing_policy_callback(test_times, Float64[],
+        sensitivity=sensitivity,
+        isrotating=isrotating
+    )
+    sol = solve(prob, callback=cb_test, userdata=Dict(:school_closed=>false))
+    q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+    child_prevalence[1][ix] = sum(sol.u[end][i,1,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[1] == 0 ? 1.0 : q[1])
+    adult_prevalence[1][ix] = sum(sol.u[end][i,2,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[2] == 0 ? 1.0 : q[2])
+end
+```
+
+##### 2 cohorts (rotating)
+
+```{julia; echo=false, results="hidden"}
+nclasses = 2
+ncohorts = 2
+
+# create problem matrix
+prob_matrix = Array{Any}(undef, m, n)
+for (j, total_infected) in enumerate(initial_infected), (i, children) in enumerate(proportion_children)
+    prob_matrix[i,j] = make_model_instance(nclasses, ncohorts, tspan, β, deepcopy(params),
+                mult=multiplier,
+                demographics=[children, 100-children],
+                total_infected=total_infected,
+                infected=infected,
+    )
+end
+
+@showprogress for (ix, prob) in enumerate(prob_matrix)
+    cb_test = make_testing_policy_callback(test_times, Float64[],
+        sensitivity=sensitivity,
+        isrotating=isrotating
+    )
+    sol = solve(prob, callback=cb_test, userdata=Dict(:school_closed=>false))
+    q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+    child_prevalence[2][ix] = sum(sol.u[end][i,1,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[1] == 0 ? 1.0 : q[1])
+    adult_prevalence[2][ix] = sum(sol.u[end][i,2,k] for i in 2:4, k in 1:ncohorts) * 100 ./ (q[2] == 0 ? 1.0 : q[2])
+end
+```
+
+```{julia; echo=false}
+# initialize figure
+fig, ax = plt.subplots(nrows=2, ncols=2)
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel("Proportion initially infected (%)")
+plt.ylabel("Children in population (%)")
+
+img = ax[1].contourf(xrange, yrange, child_prevalence[1], levels=levels, cmap=cmap)
+# ax[1].plot(2, demographics[1], "ro")
+# ax[1].plot(0.1, demographics[1], "wo")
+ax[1].set_title("Children - 1 cohort")
+
+ax[2].contourf(xrange, yrange, child_prevalence[2], levels=levels, cmap=cmap)
+# ax[2].plot(2, demographics[1], "ro")
+# ax[2].plot(0.1, demographics[1], "wo")
+ax[2].set_title("Children - 2 cohorts")
+
+ax[3].contourf(xrange, yrange, adult_prevalence[1], levels=levels, cmap=cmap)
+# ax[3].plot(2, demographics[1], "ro")
+# ax[3].plot(0.1, demographics[1], "wo")
+ax[3].set_title("Adults - 1 cohort")
+
+ax[4].contourf(xrange, yrange, adult_prevalence[2], levels=levels, cmap=cmap)
+# ax[4].plot(2, demographics[1], "ro")
+# ax[4].plot(0.1, demographics[1], "wo")
+ax[4].set_title("Adults - 2 cohorts")
+
+# add panel labels
+reindex = [1, 3, 2, 4]
+for i in eachindex(ax)
+    ax[i].text(-0.05, 1.3, string('A'+(reindex[i]-1)), transform=ax[i].transAxes,
+      fontsize=16, fontweight="bold", va="top", ha="right")
+    ax[i].xaxis.set_ticks(xrange[1]:1:xrange[end])
+    ax[i].yaxis.set_ticks(yrange[1]:10:yrange[end])
+end
+
+# settings for colorbar legend
+cb_ax = fig.add_axes([0.29, 0.02, 0.5, 0.03])
+cbar = fig.colorbar(img, cax=cb_ax, orientation="horizontal", label="Prevalence at 6 months (%)", norm=cnorm, boundaries=bounds)
+cbar.set_ticks(bounds)
+
+fig.tight_layout()
+
+PyPlot.savefig("../figures/S6_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S6_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Fig S1: Demographics from ACS-ED 2014-2018 Total Population, Demographic Characteristics (DP05)
+
+This data set summarizes the distribution of individuals whose age is (i) under 18 years, or (ii) 18 and over across school districts in the United States.
+
+```{julia; echo=false}
+# background
+rcParams["axes.grid"] = false
+rcParams["axes.facecolor"] = "0.90"
+
+# read data
+df = CSV.read("../data/ACS-ED_2014-2018_Total_Population _Demographic_Characteristics_(DP05).csv", DataFrame)
+column1 = :DP05_19P # % of total population that is under 18 years old
+column2 = :DP05_21P # % of total population that is 18 and over
+
+# drop records with missing certain information
+cleandf = dropmissing(df, :NCESID)
+filter!(:NAME => !contains("Not Defined"), cleandf)
+
+# drop records that are possibly duplicates
+unique!(cleandf, :NCESID)
+
+# drop recores with negative entries for target column - indicates an annotation
+filter!(column1 => ≥(0), cleandf)
+filter!(column2 => ≥(0), cleandf)
+
+# visualize the data
+fig, ax = subplots()
+
+data = cleandf[:, column1]
+ax.hist(data, bins=51, label="under 18")
+ax.axvline(median(data), color="k", linestyle="--", alpha=0.4)
+
+data = cleandf[:, column2]
+ax.hist(data, bins=51, label="18 and over")
+ax.axvline(median(data), color="k", linestyle="--", alpha=0.4)
+
+ax.grid(axis="y")
+ax.set_title("ACS-ED 2014-2018 Total Population: Demographic Characteristics (DP05)")
+ax.set_xlabel("Proportion of population (%)")
+ax.set_ylabel("Count")
+ax.legend()
+
+PyPlot.savefig("../figures/S1_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S1_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Appendix
+
+```{julia; echo=false, results="hidden"}
+PyPlot.close_figs()
+```
+
+```{julia}
+using InteractiveUtils; versioninfo()
+```
+
+```{julia}
+using Pkg; Pkg.status()
+```

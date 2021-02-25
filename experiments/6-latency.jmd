@@ -1,0 +1,258 @@
+---
+title: Latency period sensitivity
+weave_options:
+    fig_ext: .svg
+---
+
+```{julia; results="hidden"}
+using LinearAlgebra
+using DifferentialEquations, DiffEqCallbacks
+using COVID19SchoolDynamics
+using ProgressMeter
+using PyPlot, LaTeXStrings
+
+const CVD = COVID19SchoolDynamics
+
+rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams["axes.grid"] = true
+rcParams["font.size"] = 12
+```
+
+# Model Parameters
+
+```{julia; results="hidden"}
+# length of simulation, translated from months to days (model time scale)
+months = 6
+days = months * CVD.DAYS_PER_MONTH
+weeks = Int(round(Int, days / 7))
+tspan = (0, days*1.0);
+```
+
+```{julia; results="hidden"}
+# assuming model time in days
+
+# cohort interaction, between 0 and 1
+α = 0.05 * ones(3, 3)
+α[1,1] = 1      # cohort 1
+α[2,2] = 1      # cohort 2
+α[3,3] = 1      # cohort 3
+
+# latent period, time between exposure time and beginning of infectious period
+σ = zeros(2)
+σ[1] = 1/(3)     # children, 3 days
+σ[2] = 1/(3)     # adults, 3 days
+
+# removal rate, 'recovery' from infectious state to non-infectious
+γ = zeros(2)
+γ[1] = 1/(4)    # child recovery rate, 4 days
+γ[2] = 1/(4)    # adult recovery rate, 4 days
+
+# baseline transmission rates
+β0 = 1.5
+F = [
+    0.1     0.25    # child to j
+    0.15    0.5     # adult to j
+]
+β = β0 * F
+
+# population: [children, adults]
+demographics = [22., 78.]
+total_infected = 2.0
+infected = [10., 90.]
+
+params = (α, σ, γ);
+```
+
+# Fig S7: Sensitivity to latency period in children
+
+```{julia; results="hidden"}
+# testing sensitivity, policy threshold, and window size
+sensitivity = 1.0
+threshold = 0.05
+window = 14
+
+# assume order of magnitude increase in child-child contact
+multiplier = 10.0
+
+# testing times - school days only; applies to active cohort
+school_days = 1:1.0:5
+test_times = [(day-1) + 7*(week-1) + 1 for week in 1:weeks for day in school_days]
+
+# set range for parameters to vary
+child_latency = range(1, 14, step=0.1)
+multiplier_range = [1, 2, 10]
+```
+
+```{julia; echo=false, results="hidden"}
+# setup and allocations for output
+xrange = multiplier_range
+yrange = child_latency
+
+m = length(yrange)
+n = length(xrange)
+
+nclasses = 2
+ncohorts = 3
+
+t_thresh = [zeros(m, n) for _ in 1:ncohorts+1]
+
+# scenario parameters
+isrotating = true
+
+for k in 1:ncohorts
+    # generate problems with different parameter values
+    prob_matrix = Array{Any}(undef, m, n)
+    alpha = α[1:k,1:k]
+
+    for (j, mult) in enumerate(xrange), (i, sigma1) in enumerate(yrange)
+        p = (alpha, [1 / sigma1, σ[2]], γ)
+        prob_matrix[i,j] = make_model_instance(nclasses, k, tspan, β, p,
+            mult=mult,
+            demographics=demographics,
+            total_infected=total_infected,
+            infected=infected,
+        )
+    end
+
+    #
+    # solve the ODE for different parameter values
+    # save data for each day
+    #
+    @showprogress "Simulation for $(k) cohort(s)... " for (ix, prob) in enumerate(prob_matrix)
+        detected = sizehint!(Float64[], length(test_times))
+        cb_test = make_testing_policy_callback(test_times, detected,
+            sensitivity=sensitivity,
+            isrotating=isrotating,
+        )
+        sol = solve(prob, callback=cb_test, userdata=Dict(:school_closed=>false))
+
+        # extract 14-day window infection data
+        offset = window-1
+        x = [ sum(detected[max(1,i-window):i]) for i in eachindex(detected) ]
+
+        # find time to hit threshold
+        index = findfirst(≥(demographics[1]/sum(demographics)*threshold), x)
+        t_thresh[k][ix] = isnothing(index) ? tspan[end] : test_times[index]
+    end
+end
+```
+
+```{julia; echo=false, results="hidden"}
+isrotating = false
+
+# generate problems with different parameter values
+prob_matrix = Array{Any}(undef, m, n)
+alpha = α[1:2,1:2]
+
+for (j, mult) in enumerate(xrange), (i, sigma1) in enumerate(yrange)
+    p = (alpha, [1 / sigma1, σ[2]], γ)
+    prob_matrix[i,j] = make_model_instance(nclasses, 2, tspan, β, p,
+        mult=mult,
+        demographics=demographics,
+        total_infected=total_infected,
+        infected=infected,
+    )
+end
+
+#
+# solve the ODE for different parameter values
+# save data for each day
+#
+@showprogress "Simulation for 2 parallel cohorts... " for (ix, prob) in enumerate(prob_matrix)
+    # only the first cohort attends school in person
+    cohort_β = prob.p[4]
+
+    # cohort 1 --- in-person
+    ratef = cohort_β[1][1,1]
+    cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+    # cohort 2 --- remote learning
+    ratef = cohort_β[2][1,1]
+    cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+    # run the simulation
+    detected = sizehint!(Float64[], length(test_times))
+    cb_test = make_testing_policy_callback(test_times, detected,
+        sensitivity=sensitivity,
+        isrotating=isrotating,
+    )
+    sol = solve(prob, callback=cb_test, userdata=Dict(:school_closed=>false))
+
+    # extract 14-day window infection data
+    offset = window-1
+    x = [ sum(detected[max(1,i-window):i]) for i in eachindex(detected) ]
+
+    # find time to hit threshold
+    index = findfirst(≥(demographics[1]/sum(demographics)*threshold), x)
+    t_thresh[4][ix] = isnothing(index) ? tspan[end] : test_times[index]
+end
+```
+
+```{julia; echo=false}
+# background
+rcParams["axes.grid"] = false
+rcParams["axes.facecolor"] = "0.90"
+
+fig, axes = subplots(nrows=2, ncols=2, figsize=[8, 8])
+linestyle = ["-", "--", ":"]
+titlestr = ["1 cohort", "2 cohorts (rotating)", "3 cohorts", "2 cohorts (parallel)"]
+
+reindex = [1,3,2,4]
+
+for (k, ax) in enumerate(axes)
+    for j in 1:length(multiplier_range)
+        data = @views t_thresh[reindex[k]][:,j] ./ 7
+        ix = findfirst(<(26), data)
+        ax.plot(child_latency, data, linestyle=linestyle[j], lw=2.5)
+        # if !isnothing(ix)
+        #     ax.scatter(infected_range[ix], data[ix], marker="x", color="k", s=128.0)
+        # end
+    end
+    # set x axis
+    ax.xaxis.set_ticks(0:2:14)
+
+    # modify y axis to reflect truncated data
+    ax.grid(axis="y")
+    ax.set_ylim(0, 27)
+    ax.yaxis.set_ticks(0:2:26)
+    ax.yaxis.set_ticklabels([string.(0:2:24); ">26"])
+
+    # set labels
+    ax.set_title(titlestr[reindex[k]])
+    ax.set_xlabel("Proportion initially infected (%)")
+    ax.set_ylabel("Weeks after reopening")
+
+    # panel labels
+    ax.text(-0.04, 1.075, string('A'+(reindex[k]-1)), transform=ax.transAxes,
+      fontsize=16, fontweight="bold", va="top", ha="right")
+end
+
+fig.legend(
+    title="Contact multiplier",
+    [L"\times~" * "$(c)" for c in multiplier_range],
+    bbox_to_anchor=(0.35, -0.05, 1.02, 0),
+    loc="lower left",
+    borderaxespad=0,
+    frameon=false,
+    ncol=3)
+fig.tight_layout()
+
+PyPlot.savefig("../figures/S7_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S7_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Appendix
+
+```{julia; echo=false, results="hidden"}
+PyPlot.close_figs()
+```
+
+```{julia}
+using InteractiveUtils; versioninfo()
+```
+
+```{julia}
+using Pkg; Pkg.status()
+```

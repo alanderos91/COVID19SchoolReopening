@@ -1,0 +1,525 @@
+---
+title: Reproductive Number
+weave_options:
+    fig_ext: .svg
+---
+
+# Packages
+
+```{julia; results="hidden"}
+using LinearAlgebra
+using DifferentialEquations, COVID19SchoolDynamics
+using PyPlot, LaTeXStrings
+
+# need to import mpltern to get access to ternary plots
+PyPlot.PyCall.pyimport("mpltern")
+
+const CVD = COVID19SchoolDynamics
+
+rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams["axes.grid"] = true
+rcParams["font.size"] = 12
+```
+
+# Model Parameters
+
+```{julia; results="hidden"}
+# length of simulation, translated from months to days (model time scale)
+months = 6
+days = months * CVD.DAYS_PER_MONTH
+tspan = (0, days*1.0);
+```
+
+```{julia; results="hidden"}
+# assuming model time in days
+
+# cohort interaction, between 0 and 1
+α = 0.05 * ones(3, 3)
+α[1,1] = 1      # cohort 1
+α[2,2] = 1      # cohort 2
+α[3,3] = 1      # cohort 3
+
+# latent period, time between exposure time and beginning of infectious period
+σ = zeros(2)
+σ[1] = 1/(3)     # children, 3 days
+σ[2] = 1/(3)     # adults, 3 days
+
+# removal rate, 'recovery' from infectious state to non-infectious
+γ = zeros(2)
+γ[1] = 1/(4)    # child recovery rate, 4 days
+γ[2] = 1/(4)    # adult recovery rate, 4 days
+
+# baseline transmission rates
+β0 = 1.5
+F = [
+    0.1     0.25    # child to j
+    0.15    0.5     # adult to j
+]
+β = β0 * F
+
+# population: [children, adults]
+demographics = [22., 78.]
+total_infected = 2.0
+infected = [10., 90.]
+
+params = (α, σ, γ);
+```
+
+# Definition of $\mathcal{R}_{0}$
+
+This function implements the formula for $\mathcal{R}_{0}$ in our SEIR model.
+Note that latency parameters, $\sigma_{1}$ and $\sigma_{2}$, have no effect on the basic reproduction number unless there are deaths.
+
+```{julia; results="hidden"}
+function reproductive_number(u₀, α, β, σ, γ, μ=zero(γ))
+    m1 = 2           # number of infectious states
+    m2 = size(u₀, 3) # number of cohorts
+    m3 = size(u₀, 2) # number of age classes
+
+    # account for sizes of subclasses
+    # N[i,k] - proportion of individuals in age class i, cohort k
+    # so that sum(N) == 1
+    N = dropdims(sum(u₀, dims=1), dims=1)
+
+    # assemble transmission operator (new infections)
+    # within a single cohort k: x = [E1k, I1k, E2k, I2k]
+    # infections from from Ejk --> Ijk
+    # think in terms of basis vectors e_1, e_2, e_3, e_4, ...
+    F0 = zeros(m1*m3, m1*m3)
+    e = [1.0 * I(m1*m3)[:,j] for j in 1:m1*m3]
+
+    for j in 1:m3
+        jk = m1*(j-1) + 1
+        e_jk = e[jk]
+        # β is m3 × m3, "permutation matrix" should be m1 × m1*m3
+        F0 += kron(β[:,j], [zero(e_jk)'; e_jk'])'
+    end
+
+    # scale flows proportions of age-cohort groups relative to cohort size
+    D1 = Diagonal(vec( kron(vec(N), ones(m1)) ))
+    F1 = D1 * kron(ones(m2,m2), F0)
+
+    # tile cohort interactions across each age-cohort group
+    F2 = kron(α[1:m2,1:m2], ones(m1*m3, m1*m3))
+
+    # transmission operator is the element wise product
+    F = F1 .* F2
+
+    # assemble transition operator (flow of infections)
+    V0 = [
+        -σ[1]              0     0            0;
+         σ[1] -(γ[1] + μ[1])     0            0;
+            0              0  -σ[2]           0;
+            0              0   σ[2] -(γ[2]+μ[2])
+    ]
+    # tile across each cohort; no cross terms in this case
+    V = kron(I(m2), V0)
+
+    # compute R₀ as spectral radius of NGM (large domain)
+    R₀ = opnorm(-F * inv(V))
+
+    return R₀
+end
+```
+
+# Fig 1: Basic reproduction number as a function of transmission rates
+
+```{julia; echo=false, results="hidden"}
+# set ranges for proportion parameters, f_ij
+step_size = 1e-2
+f_range = range(0.0, 1.0, step=step_size)
+f_length = length(f_range)
+
+offset = 0.1
+
+# separate array for varying baseline transmission rates
+global beta = copy(β)
+
+# storage arrays for barycentric coordinates
+nrows = 3
+ncols = 3
+a = Vector{Vector{Float64}}(undef, nrows)
+b = Vector{Vector{Float64}}(undef, nrows)
+c = Vector{Vector{Float64}}(undef, nrows)
+
+# storage arrays for data
+R₀ = Matrix{Vector{Float64}}(undef, nrows, ncols)
+```
+
+### Case: Child-Adult and Adult-Child contributions are symmetric
+
+```{julia; echo=false}
+# figure out parameter values we will test
+j = 1
+a[j] = Float64[]
+b[j] = Float64[]
+c[j] = Float64[]
+for f11 in f_range, f22 in f_range
+    f12 = max(0, 0.5 * (1 - f11 - f22))
+    if f11 + f22 + 2*f12 == 1
+        # make sure coordinates sum to 1 to avoid normalization issues
+        push!(a[j], f11)
+        push!(b[j], f22)
+        push!(c[j], 2*f12)
+    end
+end
+
+for k in 1:3
+    # define initial conditions
+    u₀ = define_initial_conditions(total_infected, demographics, 100*ones(k)/k, infected)
+
+    # make sure cohort interaction matrix has correct size
+    alpha = α[1:k,1:k]
+
+    R₀[j,k] = Float64[]
+    for (f11, f22, f12) in zip(a[j], b[j], c[j])
+        global beta = β0 * [f11 0.5*f12; 0.5*f12 f22]
+        R = reproductive_number(u₀, alpha, beta, σ, γ)
+
+        push!(R₀[j,k], R)
+    end
+end
+```
+
+### Case: Child-Adult and Adult-Child contributions are asymmetric
+
+```{julia; echo=false}
+# figure out parameter values we will test
+j = 2
+a[j] = Float64[]
+b[j] = Float64[]
+c[j] = Float64[]
+for f12 in f_range, f21 in f_range, f22 in f_range
+    if f12 + f21 + f22 + offset == 1
+        # make sure coordinates sum to 1 to avoid normalization issues
+        push!(a[j], f12)
+        push!(b[j], f21)
+        push!(c[j], f22)
+    end
+end
+
+for k in 1:3
+    # define initial conditions
+    u₀ = define_initial_conditions(total_infected, demographics, 100*ones(k)/k, infected)
+
+    # make sure cohort interaction matrix has correct size
+    alpha = α[1:k,1:k]
+
+    R₀[j,k] = Float64[]
+    for (f12, f21, f22) in zip(a[j], b[j], c[j])
+        f11 = 1 - f12 - f21 - f22
+        global beta = β0 * [f11 f12; f21 f22]
+        R = reproductive_number(u₀, alpha, beta, σ, γ)
+
+        push!(R₀[j,k], R)
+    end
+end
+
+# figure out parameter values we will test
+j = 3
+a[j] = Float64[]
+b[j] = Float64[]
+c[j] = Float64[]
+for f12 in f_range, f21 in f_range, f11 in f_range
+    if f12 + f21 + f11 + offset == 1
+        # make sure coordinates sum to 1 to avoid normalization issues
+        push!(a[j], f12)
+        push!(b[j], f21)
+        push!(c[j], f11)
+    end
+end
+
+for k in 1:3
+    # define initial conditions
+    u₀ = define_initial_conditions(total_infected, demographics, 100*ones(k)/k, infected)
+
+    # make sure cohort interaction matrix has correct size
+    alpha = α[1:k,1:k]
+
+    R₀[j,k] = Float64[]
+    for (f12, f21, f11) in zip(a[j], b[j], c[j])
+        f22 = 1 - f12 - f21 - f11
+        global beta = β0 * [f11 f12; f21 f22]
+        R = reproductive_number(u₀, alpha, beta, σ, γ)
+
+        push!(R₀[j,k], R)
+    end
+end
+```
+
+```{julia; echo=false}
+fig, axes = subplots(
+    figsize=[ncols*4, nrows*4.0],
+    nrows=nrows, ncols=ncols,
+    subplot_kw=Dict("projection" => "ternary")
+)
+
+titles = ["1 cohort", "2 cohorts", "3 cohorts"]
+img = []
+
+tickset1 = string.( round.(β0*range(0.0, 1.0, length=6), digits=2) )
+tickset2 = string.( round.(β0*range(0.0, 0.5, length=6), digits=2) )
+tickset3 = string.( round.( (β0-offset)*range(0.0, 1.0, length=6), digits=2) )
+
+tlabels = [L"\beta_{11}", L"\beta_{12}", L"\beta_{12}"]
+llabels = [L"\beta_{22}", L"\beta_{21}", L"\beta_{21}"]
+rlabels = [L"\beta_{12} = \beta_{21}", L"\beta_{22}", L"\beta_{11}"]
+
+scalef = [1.0, 1-offset, 1-offset]
+
+Rmax = round(maximum(maximum.(R₀)))
+levels = 0:0.5:Rmax-1
+cmap = get_cmap("viridis")
+
+global ct = 1
+
+# β11: C9
+# β22: C1
+# β12=β21: 0.0
+# β12: red
+# β21: 0.5
+
+for j in 1:nrows, k in 1:ncols
+    ax = axes[j,k]
+
+    # top, left, right, value
+    push!(img, ax.tricontourf(scalef[j] * a[j], scalef[j] * b[j], scalef[j] * c[j], R₀[j,k], levels=levels, extend="max", cmap=cmap))
+    ax.tricontour(a[j], b[j], c[j], R₀[j,k], levels=[1.0], colors="w", linestyles="--")
+
+    # axis labels and title
+    j == 1 && ax.set_title(titles[k], pad=20)
+    ax.set_tlabel(tlabels[j])
+    ax.set_llabel(llabels[j])
+    ax.set_rlabel(rlabels[j])
+
+    # color guides
+    lw = 1.2
+    ccolor = j == 1 ? "C9" : "red"
+    ax.grid(axis="t", which="major", linestyle=":", linewidth=lw)
+    ax.taxis.label.set_color(ccolor)
+    ax.taxis.set_tick_params(tick2On=true, colors=ccolor, grid_color=ccolor)
+
+    ccolor = j == 1 ? "C1" : "0.5"
+    ax.grid(axis="l", which="major", linestyle="--", linewidth=lw)
+    ax.laxis.label.set_color(ccolor)
+    ax.laxis.set_tick_params(tick2On=true, colors=ccolor, grid_color=ccolor)
+
+    ccolor = j == 1 ? "0.0" : j == 2 ? "C1" : "C9"
+    ax.grid(axis="r", which="major", linestyle="-", linewidth=lw)
+    ax.raxis.label.set_color(ccolor)
+    ax.raxis.set_tick_params(tick2On=true, colors=ccolor, grid_color=ccolor)
+
+    # set label positions
+    ax.taxis.set_label_position("tick1")
+    ax.laxis.set_label_position("tick1")
+    ax.raxis.set_label_position("tick1")
+
+    # rotate ticks and labels
+    ax.tick_params(labelrotation="horizontal")
+    ax.taxis.set_label_rotation_mode("horizontal")
+    ax.laxis.set_label_rotation_mode("horizontal")
+    ax.raxis.set_label_rotation_mode("horizontal")
+
+    # axis ticks
+    if j == 1
+        ax.taxis.set_ticklabels(tickset1)
+        ax.laxis.set_ticklabels(tickset1)
+        ax.raxis.set_ticklabels(tickset2)
+    else
+        ax.taxis.set_ticklabels(tickset3)
+        ax.laxis.set_ticklabels(tickset3)
+        ax.raxis.set_ticklabels(tickset3)
+    end
+
+    # figure label
+    ax.text(0.0, 1.0, string('A'+ct-1), transform=ax.transAxes,
+      fontsize=16, fontweight="bold", va="top", ha="right")
+    global ct += 1
+end
+
+# add annotations
+fig.text(0.85, -0.01, latexstring("\\beta_{0} = $(β0)"), fontsize=14)
+axes[1].text(-0.15, 0.4, "Symmetric", rotation=90, transform=axes[1].transAxes, fontsize=14)
+axes[2].text(-0.15, 0.4, color="C9", latexstring("\\beta_{11} = $(offset)"), rotation=90, transform=axes[2].transAxes, fontsize=14)
+axes[3].text(-0.15, 0.4, color="C1", latexstring("\\beta_{22} = $(offset)"), rotation=90, transform=axes[3].transAxes, fontsize=14)
+
+# add colorbar
+cb_ax = fig.add_axes([0.26, 0.0, 0.5, 0.025])
+cbar = fig.colorbar(img[1], cax=cb_ax, orientation="horizontal",
+    label=latexstring(L"\mathcal{R}_{0}", " for population"),
+    ticks=0:Rmax
+)
+
+fig.tight_layout()
+
+PyPlot.savefig("../figures/Fig2.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/Fig2.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Fig S2: Interaction between bulk transmission rate and demography
+
+```{julia; echo=false, results="hidden"}
+beta0_range = range(0, 2, length=51)
+percent_children = range(0, 100, length=51)
+
+m = length(beta0_range)
+n = length(percent_children)
+
+# separate array for varying baseline transmission rates
+beta = copy(β)
+
+# storage arrays for data
+nrows = 1
+ncols = 3
+R₀ = Matrix{Matrix{Float64}}(undef, nrows, ncols)
+```
+
+```{julia; echo=false}
+l = 1
+for k in 1:3
+    # make sure cohort interaction matrix has correct size
+    alpha = α[1:k,1:k]
+
+    R₀[l,k] = Matrix{Float64}(undef, m, n)
+    for (j, children) in enumerate(percent_children), (i, beta0) in enumerate(beta0_range)
+        temp = [children, 100 - children]
+        u₀ = define_initial_conditions(total_infected, temp, 100*ones(k)/k, infected)
+        global beta = beta0 * F
+        R = reproductive_number(u₀, alpha, beta, σ, γ)
+
+        R₀[l,k][i,j] = R
+    end
+end
+```
+
+```{julia; echo=false}
+fig, axes = subplots(nrows=nrows,ncols=ncols,figsize=[3*4,4])
+fig.subplots_adjust(wspace=0.05)
+img = []
+
+Rmax = maximum(maximum.(R₀))
+title = ["1 cohort", "2 cohorts", "3 cohorts"]
+
+xrange = percent_children
+yrange = beta0_range
+
+for (k, ax) in enumerate(axes)
+    push!(img, ax.contourf(xrange, yrange, R₀[k], levels=0:1:round(Rmax), extend="max"))
+    ax.contour(xrange, yrange, R₀[k], levels=[1.0], colors="w", linestyles="--")
+    ax.grid(false)
+    ax.set_title(title[k])
+    ax.set_xlabel("Children in population (%)")
+    ax.set_ylabel(latexstring("Bulk transmission rate, ", L"\beta_{0}"))
+    ax.xaxis.set_ticks(xrange[1]:10:xrange[end])
+    # figure label
+    ax.text(-0.17, 1.02, string('A'+k-1), transform=ax.transAxes,
+        fontsize=16, fontweight="bold", va="top", ha="right"
+    )
+end
+
+cb_ax = fig.add_axes([0.27, 0.0, 0.5, 0.025])
+cbar = fig.colorbar(img[1], cax=cb_ax, orientation="horizontal",
+    label=latexstring(L"\mathcal{R}_{0}", " for population"),
+    ticks=0:Rmax
+)
+
+fig.tight_layout()
+
+PyPlot.savefig("../figures/S2_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S2_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Fig S3: Basic reproduction number as a function of infection period
+
+```{julia; echo=false, results="hidden"}
+# set ranges for latency parameters, σ_i
+step_size = 5e-2
+child_infectious_range = range(0, 7, step=step_size)
+adult_infectious_range = range(0, 7, step=step_size)
+
+# assume adult-adult and child-adult transmission are significant
+beta = β0 * [
+    0.1     0.25    # child to j
+    0.15    0.5     # adult to j
+]
+
+# coordinates for plots
+xrange = child_infectious_range
+yrange = adult_infectious_range
+
+# storage arrays for data
+nrows = 1
+ncols = 3
+R₀ = Matrix{Matrix{Float64}}(undef, nrows, ncols)
+```
+
+```{julia; echo=false}
+l = 1
+for k in 1:3
+    # define initial conditions
+    u₀ = define_initial_conditions(total_infected, demographics, 100*ones(k)/k, infected)
+
+    # make sure cohort interaction matrix has correct size
+    alpha = α[1:k,1:k]
+
+    R₀[l,k] = Matrix{Float64}(undef, length(yrange), length(xrange))
+    for (j, γ1) in enumerate(xrange), (i, γ2) in enumerate(yrange)
+        gamma = 1 ./ [γ1, γ2]
+        R₀[l,k][i,j] = reproductive_number(u₀, alpha, beta, σ, gamma)
+    end
+end
+
+fig, axes = subplots(nrows=nrows,ncols=ncols,figsize=[3*4,4])
+fig.subplots_adjust(wspace=0.05)
+img = []
+
+Rmax = maximum(maximum.(R₀))
+title = ["1 cohort", "2 cohorts", "3 cohorts"]
+
+for (k, ax) in enumerate(axes)
+    push!(img, ax.contourf(xrange, yrange, R₀[k], levels=0:0.5:6, extend="max"))
+    ax.contour(xrange, yrange, R₀[k], levels=[1.0], colors="w", linestyles="--")
+    ax.grid(false)
+    ax.set_title(title[k])
+    ax.set_xlabel(latexstring("Child infection period, ", L"1 / \gamma_{1}"))
+    ax.set_ylabel(latexstring("Adult infection period, ", L"1 / \gamma_{2}"))
+    ax.xaxis.set_ticks(xrange[1]:1:xrange[end])
+    ax.set_aspect(1)
+
+    # figure label
+    ax.text(-0.09, 1.02, string('A'+k-1), transform=ax.transAxes,
+        fontsize=16, fontweight="bold", va="top", ha="right"
+    )
+end
+
+cb_ax = fig.add_axes([0.27, 0.0, 0.5, 0.025])
+cbar = fig.colorbar(img[1], cax=cb_ax, orientation="horizontal",
+    label=latexstring(L"\mathcal{R}_{0}", " for population"),
+    ticks=0:Rmax
+)
+
+fig.tight_layout()
+
+PyPlot.savefig("../figures/S3_fig.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/S3_fig.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Appendix
+
+```{julia; echo=false, results="hidden"}
+PyPlot.close_figs()
+```
+
+```{julia}
+using InteractiveUtils; versioninfo()
+```
+
+```{julia}
+using Pkg; Pkg.status()
+```

@@ -1,0 +1,371 @@
+---
+title: Reopening with parallel cohorts
+weave_options:
+    fig_ext: .svg
+---
+
+# Packages
+
+```{julia; results="hidden"}
+using LinearAlgebra
+using DifferentialEquations, DiffEqCallbacks
+using COVID19SchoolDynamics
+using ProgressMeter
+using PyPlot, LaTeXStrings
+
+const CVD = COVID19SchoolDynamics
+
+rcParams = PyPlot.PyDict(PyPlot.matplotlib."rcParams")
+rcParams["axes.grid"] = true
+rcParams["font.size"] = 12
+```
+
+# Model Parameters
+
+```{julia; results="hidden"}
+# length of simulation, translated from months to days (model time scale)
+months = 6
+days = months * CVD.DAYS_PER_MONTH
+weeks = Int(round(Int, days / 7))
+tspan = (0, days*1.0);
+```
+
+```{julia; results="hidden"}
+# assuming model time in days
+
+# cohort interaction, between 0 and 1
+α = 0.05 * ones(3, 3)
+α[1,1] = 1      # cohort 1
+α[2,2] = 1      # cohort 2
+α[3,3] = 1      # cohort 3
+
+# latent period, time between exposure time and beginning of infectious period
+σ = zeros(2)
+σ[1] = 1/(3)     # children, 3 days
+σ[2] = 1/(3)     # adults, 3 days
+
+# removal rate, 'recovery' from infectious state to non-infectious
+γ = zeros(2)
+γ[1] = 1/(4)    # child recovery rate, 4 days
+γ[2] = 1/(4)    # adult recovery rate, 4 days
+
+# baseline transmission rates
+β0 = 1.2
+F = [
+    0.1     0.25    # child to j
+    0.15    0.5     # adult to j
+]
+β = β0 * F
+
+# population: [children, adults]
+demographics = [22., 78.]
+total_infected = 2.0
+infected = [10., 90.]
+
+params = (α, σ, γ);
+```
+
+```{julia; echo=false, results="hidden"}
+function get_compartment(u, i, j)
+    c = zero(eltype(u))
+    for k in 1:size(u, 3)
+        c += max(0, u[i,j,k])
+    end
+    return c
+end
+
+infected_child_fraction(u) = get_compartment(u, 3, 1)
+removed_child_fraction(u) = get_compartment(u, 4, 1)
+cumulative_child_fraction(u) = infected_child_fraction(u) + removed_child_fraction(u)
+
+infected_adult_fraction(u) = get_compartment(u, 3, 2)
+removed_adult_fraction(u) = get_compartment(u, 4, 2)
+cumulative_adult_fraction(u) = infected_adult_fraction(u) + removed_adult_fraction(u)
+
+scale_percent(t, x) = (t, scale_percent(x))
+scale_percent(x) = x * 100
+```
+
+# Fig 5: Alternative cohort structure
+
+Two cohorts: one attends school, the other opts for remote learning.
+The in-person cohort has an elevated child-to-child transmission rate.
+
+```{julia; results="hidden"}
+# policy parameters
+threshold = 0.05
+sensitivity_tested = [1.0, 0.5]
+window = 14
+
+# simulation parameters
+nclasses = 2
+ncohorts = 2
+
+multiplier = 10.0
+
+# testing times - school days only; applies to active cohort
+school_days = 1:1.0:5
+test_times = [(day-1) + 7*(week-1) for week in 1:weeks for day in school_days]
+```
+
+```{julia; echo=false, results="hidden"}
+# allocate outputs
+solution = []
+child_detected = []
+
+# no intervention
+prob = make_model_instance(nclasses, ncohorts, tspan, β, params,
+    mult=multiplier,
+    demographics=demographics,
+    total_infected=total_infected,
+    infected=infected,
+)
+
+# only the first cohort attends school in person
+cohort_β = prob.p[4]
+
+# cohort 1 --- in-person
+ratef = cohort_β[1][1,1]
+cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+# cohort 2 --- remote learning
+ratef = cohort_β[2][1,1]
+cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+detected_cases = Float64[]
+sol = solve(prob, saveat=1.0)
+push!(solution, sol)
+push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+
+# with intervention, perfect detection
+detected_cases = Float64[]
+cb_test, cb_threshold, cbs = make_threshold_policy_callbacks(test_times, detected_cases,
+    sensitivity=sensitivity_tested[1],
+    isrotating=false,
+    threshold=threshold,
+    window=window,
+)
+prob = make_model_instance(nclasses, ncohorts, tspan, β, params,
+    mult=multiplier,
+    demographics=demographics,
+    total_infected=total_infected,
+    infected=infected,
+)
+
+# only the first cohort attends school in person
+cohort_β = prob.p[4]
+
+# cohort 1 --- in-person
+ratef = cohort_β[1][1,1]
+cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+# cohort 2 --- remote learning
+ratef = cohort_β[2][1,1]
+cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+sol = solve(prob, saveat=1.0, callback=cbs, userdata=Dict(:school_closed=>false))
+push!(solution, sol)
+push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+
+# with intervention, 50% detection
+detected_cases = Float64[]
+cb_test, cb_threshold, cbs = make_threshold_policy_callbacks(test_times, detected_cases,
+    sensitivity=sensitivity_tested[2],
+    isrotating=false,
+    threshold=threshold,
+    window=window,
+)
+
+prob = make_model_instance(nclasses, ncohorts, tspan, β, params,
+    mult=multiplier,
+    demographics=demographics,
+    total_infected=total_infected,
+    infected=infected,
+)
+
+# only the first cohort attends school in person
+cohort_β = prob.p[4]
+
+# cohort 1 --- in-person
+ratef = cohort_β[1][1,1]
+cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+# cohort 2 --- remote learning
+ratef = cohort_β[2][1,1]
+cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
+
+sol = solve(prob, saveat=1.0, callback=cbs, userdata=Dict(:school_closed=>false))
+
+push!(solution, sol)
+push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+```
+
+```{julia; echo=false}
+# background
+rcParams["axes.grid"] = false
+rcParams["axes.facecolor"] = "0.90"
+
+fig, ax = subplots(figsize=[2*4.0, 2*4.0], nrows=3, ncols=2)
+
+ymin = 0.0
+ymax = 14.0
+
+common_xticks = 0:14:tspan[end] # show every two weeks
+common_yticks = 0:2:ymax
+common_xtickl = string.(Int.(common_xticks .÷ 7))
+
+##### no intervention ####
+u0 = prob.u0
+q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+
+scenario = solution[1]
+ts = scenario.t
+child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
+child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
+adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
+adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
+
+# children
+ax[1].plot(ts, child_school, label="in-person")
+ax[1].plot(ts, child_remote, label="remote")
+ax[1].hlines(threshold * 100, ts[1], ts[end], linestyles="--", label="threshold")
+
+ax[1].set_title("Children (no intervention)")
+ax[1].set_xticks(common_xticks)
+ax[1].set_yticks(common_yticks)
+ax[1].set_xticklabels(common_xtickl)
+ax[1].set_ylim(ymin, ymax)
+
+# adults
+ax[4].plot(ts, adult_school)
+ax[4].plot(ts, adult_remote)
+
+ax[4].set_title("Adults (no intervention)")
+ax[4].set_xticks(common_xticks)
+ax[4].set_yticks(common_yticks)
+ax[4].set_xticklabels(common_xtickl)
+ax[4].set_ylim(ymin, ymax)
+
+##### shutdown when threshold is hit, perfect detection ####
+u0 = prob.u0
+q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+
+scenario = solution[2]
+ts = scenario.t
+child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
+child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
+adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
+adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
+
+# find time that we hit threshold
+x = [sum(child_detected[2][max(1,i-window+1):i]) for i in eachindex(child_detected[2])]
+index = findfirst(≥(threshold * 100), x)
+if !isnothing(index)
+    t_thresh = test_times[index]
+    ax[2].vlines(t_thresh, ymin, ymax, linestyles=":")
+end
+
+# children
+ax[2].plot(ts, child_school)
+ax[2].plot(ts, child_remote)
+ax[2].plot(test_times, x, linestyle=":", label="detected", lw=2)
+ax[2].hlines(threshold * 100, ts[1], ts[end], linestyles="--")
+
+ax[2].set_title("Children (100% detection)")
+ax[2].set_xticks(common_xticks)
+ax[2].set_yticks(common_yticks)
+ax[2].set_xticklabels(common_xtickl)
+ax[2].set_ylim(ymin, ymax)
+ax[2].set_ylabel("Population (%)")
+
+# adults
+ax[5].plot(ts, adult_school)
+ax[5].plot(ts, adult_remote)
+
+ax[5].set_title("Adults (100% detection)")
+ax[5].set_xticks(common_xticks)
+ax[5].set_yticks(common_yticks)
+ax[5].set_xticklabels(common_xtickl)
+ax[5].set_ylim(ymin, ymax)
+ax[5].set_ylabel("Population (%)")
+
+##### shutdown when threshold is hit, 50% detection ####
+u0 = prob.u0
+q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+
+scenario = solution[3]
+ts = scenario.t
+child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
+child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
+adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
+adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
+
+# find time that we hit threshold
+x = [sum(child_detected[3][max(1,i-window+1):i]) for i in eachindex(child_detected[3])]
+index = findfirst(≥(threshold * 100), x)
+if !isnothing(index)
+    t_thresh = test_times[index]
+    ax[2].vlines(t_thresh, ymin, ymax, linestyles=":")
+end
+
+# children
+ax[3].plot(ts, child_school)
+ax[3].plot(ts, child_remote)
+ax[3].plot(test_times, x, linestyle=":", lw=2)
+ax[3].hlines(threshold * 100, ts[1], ts[end], linestyles="--")
+
+ax[3].set_title("Children (50% detection)")
+ax[3].set_xlabel("Weeks after reopening")
+ax[3].set_xticks(common_xticks)
+ax[3].set_yticks(common_yticks)
+ax[3].set_xticklabels(common_xtickl)
+ax[3].set_ylim(ymin, ymax)
+
+# adults
+ax[6].plot(ts, adult_school)
+ax[6].plot(ts, adult_remote)
+
+ax[6].set_title("Adults (50% detection)")
+ax[6].set_xlabel("Weeks after reopening")
+ax[6].set_xticks(common_xticks)
+ax[6].set_yticks(common_yticks)
+ax[6].set_xticklabels(common_xtickl)
+ax[6].set_ylim(ymin, ymax)
+
+# add figure legend
+fig.legend(
+    bbox_to_anchor=(0.15,0,1.02,0),
+    loc="lower left",
+    borderaxespad=0,
+    frameon=false,
+    ncol=4)
+fig.tight_layout()
+fig.subplots_adjust(bottom=0.09)
+
+# add labels to each panel
+reindex = [1,3,5,2,4,6]
+for i in eachindex(ax)
+    ax[i].text(-0.1, 1.15, string('A'+(reindex[i]-1)), transform=ax[i].transAxes,
+      fontsize=16, fontweight="bold", va="top", ha="right")
+    ax[i].grid(axis="y")
+end
+
+PyPlot.savefig("../figures/Fig5.png", dpi=300, bbox_inches="tight")
+PyPlot.savefig("../figures/Fig5.tiff", dpi=300, bbox_inches="tight")
+
+fig
+```
+
+# Appendix
+
+```{julia; echo=false, results="hidden"}
+PyPlot.close_figs()
+```
+
+```{julia}
+using InteractiveUtils; versioninfo()
+```
+
+```{julia}
+using Pkg; Pkg.status()
+```
