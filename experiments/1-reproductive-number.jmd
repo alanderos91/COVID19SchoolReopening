@@ -395,8 +395,16 @@ end
 ```
 
 ```{julia; echo=false}
+rcParams["axes.grid"] = false
 fig, axes = subplots(nrows=nrows,ncols=ncols,figsize=[3*4,4])
+
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel("Children in population (%)")
+plt.ylabel(latexstring("Bulk transmission rate, ", L"\beta_{0}"))
+
 fig.subplots_adjust(wspace=0.05)
+
 img = []
 
 Rmax = maximum(maximum.(R₀))
@@ -410,8 +418,6 @@ for (k, ax) in enumerate(axes)
     ax.contour(xrange, yrange, R₀[k], levels=[1.0], colors="w", linestyles="--")
     ax.grid(false)
     ax.set_title(title[k])
-    ax.set_xlabel("Children in population (%)")
-    ax.set_ylabel(latexstring("Bulk transmission rate, ", L"\beta_{0}"))
     ax.xaxis.set_ticks(xrange[1]:10:xrange[end])
     # figure label
     ax.text(-0.17, 1.02, string('A'+k-1), transform=ax.transAxes,
@@ -474,7 +480,14 @@ for k in 1:3
 end
 
 fig, axes = subplots(nrows=nrows,ncols=ncols,figsize=[3*4,4])
+
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel(latexstring("Child infection period, ", L"1 / \gamma_{1}"))
+plt.ylabel(latexstring("Adult infection period, ", L"1 / \gamma_{2}"))
+
 fig.subplots_adjust(wspace=0.05)
+
 img = []
 
 Rmax = maximum(maximum.(R₀))
@@ -485,8 +498,6 @@ for (k, ax) in enumerate(axes)
     ax.contour(xrange, yrange, R₀[k], levels=[1.0], colors="w", linestyles="--")
     ax.grid(false)
     ax.set_title(title[k])
-    ax.set_xlabel(latexstring("Child infection period, ", L"1 / \gamma_{1}"))
-    ax.set_ylabel(latexstring("Adult infection period, ", L"1 / \gamma_{2}"))
     ax.xaxis.set_ticks(xrange[1]:1:xrange[end])
     ax.set_aspect(1)
 

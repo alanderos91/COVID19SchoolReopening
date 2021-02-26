@@ -84,6 +84,38 @@ cumulative_adult_fraction(u) = infected_adult_fraction(u) + removed_adult_fracti
 
 scale_percent(t, x) = (t, scale_percent(x))
 scale_percent(x) = x * 100
+
+# recording data
+function record_figure_data!(data, sol, detected, threshold, window, test_times, demographics)
+    # shorthand
+    q = demographics / sum(demographics)
+    ts = sol.t
+    u = sol.u
+
+    # find threshold time
+    x = [ sum(detected[max(1,i-window):i]) for i in eachindex(detected) ]
+    index = findfirst(≥(q[1]*threshold), x)
+    t_thresh = isnothing(index) ? Inf : test_times[index]
+
+    # time points in solution
+    push!(data.ts, sol.t)
+
+    # child data
+    push!(data.child_school_I,  scale_percent.(sol[3,1,1,:]) ./ q[1])
+    push!(data.child_remote_I,  scale_percent.(sol[3,1,2,:]) ./ q[1])
+    push!(data.child_school_S,  scale_percent.(sol[1,1,1,:]) ./ q[1])
+    push!(data.child_remote_S,  scale_percent.(sol[1,1,2,:]) ./ q[1])
+    push!(data.child_detected,  scale_percent.(x) ./ q[1])
+
+    push!(data.adult_school_I,  scale_percent.(sol[3,2,1,:]) ./ q[2])
+    push!(data.adult_remote_I,  scale_percent.(sol[3,2,2,:]) ./ q[2])
+    push!(data.adult_school_S,  scale_percent.(sol[1,2,1,:]) ./ q[2])
+    push!(data.adult_remote_S,  scale_percent.(sol[1,2,2,:]) ./ q[2])
+
+    push!(data.t_thresh,        t_thresh)
+
+    return nothing
+end
 ```
 
 # Fig 5: Alternative cohort structure
@@ -105,13 +137,27 @@ multiplier = 10.0
 
 # testing times - school days only; applies to active cohort
 school_days = 1:1.0:5
-test_times = [(day-1) + 7*(week-1) for week in 1:weeks for day in school_days]
+test_times = [(day-1) + 7*(week-1) for week in 1:weeks for day in school_days];
 ```
 
 ```{julia; echo=false, results="hidden"}
 # allocate outputs
-solution = []
-child_detected = []
+data = (
+    ts                = Vector{Float64}[], # time axis
+    child_school_I    = Vector{Float64}[], # I_11
+    child_remote_I    = Vector{Float64}[], # I_12
+    child_school_S    = Vector{Float64}[], # S_11
+    child_remote_S    = Vector{Float64}[], # S_12
+    child_detected    = Vector{Float64}[], # 14-window criterion
+    adult_school_I    = Vector{Float64}[], # I_21
+    adult_remote_I    = Vector{Float64}[], # I_22
+    adult_school_S    = Vector{Float64}[], # S_21
+    adult_remote_S    = Vector{Float64}[], # S_22
+    t_thresh          = Float64[],         # threshold time
+)
+
+# closure to make things easier
+record_figure_data!(data, sol, detected) = record_figure_data!(data, sol, detected, threshold, window, test_times, demographics)
 
 # no intervention
 prob = make_model_instance(nclasses, ncohorts, tspan, β, params,
@@ -132,10 +178,12 @@ cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.
 ratef = cohort_β[2][1,1]
 cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
 
+# run simulation
 detected_cases = Float64[]
-sol = solve(prob, saveat=1.0)
-push!(solution, sol)
-push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+sol = solve(prob)
+
+# record data
+record_figure_data!(data, sol, detected_cases)
 
 # with intervention, perfect detection
 detected_cases = Float64[]
@@ -163,9 +211,11 @@ cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.
 ratef = cohort_β[2][1,1]
 cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
 
-sol = solve(prob, saveat=1.0, callback=cbs, userdata=Dict(:school_closed=>false))
-push!(solution, sol)
-push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+# run simulation
+sol = solve(prob, callback=cbs, userdata=Dict(:school_closed=>false))
+
+# record data
+record_figure_data!(data, sol, detected_cases)
 
 # with intervention, 50% detection
 detected_cases = Float64[]
@@ -194,10 +244,11 @@ cohort_β[1][1,1] = TransmissionRate(ratef.cmax, ratef.cmin, ratef.start, ratef.
 ratef = cohort_β[2][1,1]
 cohort_β[2][1,1] = TransmissionRate(ratef.cmin, ratef.cmin, ratef.start, ratef.stop, K=ratef.K)
 
-sol = solve(prob, saveat=1.0, callback=cbs, userdata=Dict(:school_closed=>false))
+# run simulation
+sol = solve(prob, callback=cbs, userdata=Dict(:school_closed=>false))
 
-push!(solution, sol)
-push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
+# record data
+record_figure_data!(data, sol, detected_cases)
 ```
 
 ```{julia; echo=false}
@@ -205,150 +256,101 @@ push!(child_detected,   detected_cases / (demographics[1] / 100) * 100)
 rcParams["axes.grid"] = false
 rcParams["axes.facecolor"] = "0.90"
 
-fig, ax = subplots(figsize=[2*4.0, 2*4.0], nrows=3, ncols=2)
+fig, ax = subplots(figsize=[14.0, 6.0], nrows=2, ncols=3)
 
-ymin = 0.0
-ymax = 14.0
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel("Weeks after reopening")
+plt.ylabel("Proportion (%)", labelpad=20)
 
 common_xticks = 0:14:tspan[end] # show every two weeks
-common_yticks = 0:2:ymax
 common_xtickl = string.(Int.(common_xticks .÷ 7))
 
-##### no intervention ####
-u0 = prob.u0
-q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
+ymin = 0.0
+ymax = 8.0
 
-scenario = solution[1]
-ts = scenario.t
-child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
-child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
-adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
-adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
+#
+#   i = 1: no intervention
+#   i = 2: 100% sensitivity
+#   i = 3: 50% sensitivity
+#
+for i in eachindex(data.ts)
+    # 1,1 -- infections in children in school cohort
+    x = data.child_detected[i]
+    ax[1].plot(data.ts[i], data.child_school_I[i], "-", color="C$(i-1)", lw=3)
+    ax[1].plot(test_times[1:length(x)], x, "--", color="C$(i-1)", lw=3)
+    (i > 1) && ax[1].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-# children
-ax[1].plot(ts, child_school, label="in-person")
-ax[1].plot(ts, child_remote, label="remote")
-ax[1].hlines(threshold * 100, ts[1], ts[end], linestyles="--", label="threshold")
+    # 2,1 -- infections in adults in school cohort
+    ax[2].plot(data.ts[i], data.adult_school_I[i], "-", color="C$(i-1)", lw=3)
+    (i > 1) && ax[2].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-ax[1].set_title("Children (no intervention)")
-ax[1].set_xticks(common_xticks)
-ax[1].set_yticks(common_yticks)
-ax[1].set_xticklabels(common_xtickl)
-ax[1].set_ylim(ymin, ymax)
+    # 1,2 -- infections in children in home cohort
+    ax[3].plot(data.ts[i], data.child_remote_I[i], "-", color="C$(i-1)", lw=3)
+    (i > 1) && ax[3].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-# adults
-ax[4].plot(ts, adult_school)
-ax[4].plot(ts, adult_remote)
+    # 2,2 -- infections in adults in home cohort
+    ax[4].plot(data.ts[i], data.adult_remote_I[i], "-", color="C$(i-1)", lw=3)
+    (i > 1) && ax[4].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-ax[4].set_title("Adults (no intervention)")
-ax[4].set_xticks(common_xticks)
-ax[4].set_yticks(common_yticks)
-ax[4].set_xticklabels(common_xtickl)
-ax[4].set_ylim(ymin, ymax)
+    # 1,3 -- susceptible children
+    y = data.child_school_S[i] + data.child_remote_S[i]
+    ax[5].plot(data.ts[i], y, "-", color="C$(i-1)", lw=3)
+    (i > 1) && ax[5].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-##### shutdown when threshold is hit, perfect detection ####
-u0 = prob.u0
-q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
-
-scenario = solution[2]
-ts = scenario.t
-child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
-child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
-adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
-adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
-
-# find time that we hit threshold
-x = [sum(child_detected[2][max(1,i-window+1):i]) for i in eachindex(child_detected[2])]
-index = findfirst(≥(threshold * 100), x)
-if !isnothing(index)
-    t_thresh = test_times[index]
-    ax[2].vlines(t_thresh, ymin, ymax, linestyles=":")
+    # 2,3 -- susceptible adults
+    y = data.adult_school_S[i] + data.adult_remote_S[i]
+    ax[6].plot(data.ts[i], y, "-", color="C$(i-1)", lw=3)
+    (i > 1) && ax[6].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 end
 
-# children
-ax[2].plot(ts, child_school)
-ax[2].plot(ts, child_remote)
-ax[2].plot(test_times, x, linestyle=":", label="detected", lw=2)
-ax[2].hlines(threshold * 100, ts[1], ts[end], linestyles="--")
+for i in eachindex(ax)
+    ax[i].xaxis.set_ticks(common_xticks)
+    ax[i].xaxis.set_ticklabels(common_xtickl)
 
-ax[2].set_title("Children (100% detection)")
-ax[2].set_xticks(common_xticks)
-ax[2].set_yticks(common_yticks)
-ax[2].set_xticklabels(common_xtickl)
-ax[2].set_ylim(ymin, ymax)
-ax[2].set_ylabel("Population (%)")
-
-# adults
-ax[5].plot(ts, adult_school)
-ax[5].plot(ts, adult_remote)
-
-ax[5].set_title("Adults (100% detection)")
-ax[5].set_xticks(common_xticks)
-ax[5].set_yticks(common_yticks)
-ax[5].set_xticklabels(common_xtickl)
-ax[5].set_ylim(ymin, ymax)
-ax[5].set_ylabel("Population (%)")
-
-##### shutdown when threshold is hit, 50% detection ####
-u0 = prob.u0
-q = dropdims(sum(prob.u0, dims=(1,3)), dims=(1,3))
-
-scenario = solution[3]
-ts = scenario.t
-child_school = (scenario[3,1,1,:] .+ scenario[4,1,1,:]) * 100 / q[1]
-child_remote = (scenario[3,1,2,:] .+ scenario[4,1,2,:]) * 100 / q[1]
-adult_school = (scenario[3,2,1,:] .+ scenario[4,2,1,:]) * 100 / q[2]
-adult_remote = (scenario[3,2,2,:] .+ scenario[4,2,2,:]) * 100 / q[2]
-
-# find time that we hit threshold
-x = [sum(child_detected[3][max(1,i-window+1):i]) for i in eachindex(child_detected[3])]
-index = findfirst(≥(threshold * 100), x)
-if !isnothing(index)
-    t_thresh = test_times[index]
-    ax[2].vlines(t_thresh, ymin, ymax, linestyles=":")
+    if i ≥ 5
+        ax[i].set_ylim(75, 100)
+    else
+        ax[i].set_ylim(0, 1.5)
+    end
 end
 
-# children
-ax[3].plot(ts, child_school)
-ax[3].plot(ts, child_remote)
-ax[3].plot(test_times, x, linestyle=":", lw=2)
-ax[3].hlines(threshold * 100, ts[1], ts[end], linestyles="--")
+# set labels for rows
+ax[1].set_ylabel("Children")
+ax[2].set_ylabel("Adults")
 
-ax[3].set_title("Children (50% detection)")
-ax[3].set_xlabel("Weeks after reopening")
-ax[3].set_xticks(common_xticks)
-ax[3].set_yticks(common_yticks)
-ax[3].set_xticklabels(common_xtickl)
-ax[3].set_ylim(ymin, ymax)
-
-# adults
-ax[6].plot(ts, adult_school)
-ax[6].plot(ts, adult_remote)
-
-ax[6].set_title("Adults (50% detection)")
-ax[6].set_xlabel("Weeks after reopening")
-ax[6].set_xticks(common_xticks)
-ax[6].set_yticks(common_yticks)
-ax[6].set_xticklabels(common_xtickl)
-ax[6].set_ylim(ymin, ymax)
+# set labels for columns
+ax[1].set_title("School cohort")
+ax[3].set_title("Remote cohort")
+ax[5].set_title("Susceptibles (combined)")
 
 # add figure legend
+artist_c0 = plt.Line2D((0,1), (0,0), color="C0")
+artist_c1 = plt.Line2D((0,1), (0,0), color="C1")
+artist_c2 = plt.Line2D((0,1), (0,0), color="C2")
+
+artist_solid = plt.Line2D((0,1), (0,0), color="k", linestyle="-")
+artist_dash = plt.Line2D((0,1), (0,0), color="k", linestyle="--")
+
 fig.legend(
-    bbox_to_anchor=(0.15,0,1.02,0),
+    (artist_c0, artist_c1, artist_c2, artist_solid, artist_dash),
+    ("no intervention", "100% detection", "50% detection", latexstring(L"I(t)", " / ", L"S(t)"), "detected"),
+    bbox_to_anchor=(0.21,0.0,0.5,0),
     loc="lower left",
-    borderaxespad=0,
+    borderaxespad=0.0,
     frameon=false,
-    ncol=4)
-fig.tight_layout()
+    ncol=5)
 fig.subplots_adjust(bottom=0.09)
 
-# add labels to each panel
-reindex = [1,3,5,2,4,6]
+# add labels to each subplot
+reindex = [1, 4, 2, 5, 3, 6]
 for i in eachindex(ax)
-    ax[i].text(-0.1, 1.15, string('A'+(reindex[i]-1)), transform=ax[i].transAxes,
+    ax[i].text(-0.04, 1.15, string('A'+(reindex[i]-1)), transform=ax[i].transAxes,
       fontsize=16, fontweight="bold", va="top", ha="right")
     ax[i].grid(axis="y")
 end
+
+fig.tight_layout()
 
 PyPlot.savefig("../figures/Fig5.png", dpi=300, bbox_inches="tight")
 PyPlot.savefig("../figures/Fig5.tiff", dpi=300, bbox_inches="tight")

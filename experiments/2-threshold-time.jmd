@@ -108,11 +108,8 @@ multiplier = 10.0
 # testing times - school days only; applies to active cohort
 school_days = 1:1.0:5
 test_times = [(day-1) + 7*(week-1) + 1 for week in 1:weeks for day in school_days]
-```
 
-**Note**: This assumes a population mix of 22% school-age children.
-
-```{julia; echo=false}
+# parameter set
 infected_range = range(0.0, 10.0, length=201)
 multiplier_range = [1, 2, 10]
 
@@ -125,8 +122,10 @@ n = length(xrange)
 nclasses = 2
 ncohorts = 3
 
-t_thresh = [zeros(m, n) for _ in 1:ncohorts+1]
+t_thresh = [zeros(m, n) for _ in 1:ncohorts+1];
 ```
+
+**Note**: This assumes a population mix of 22% school-age children.
 
 ```{julia; echo=false}
 # scenario parameters
@@ -225,6 +224,11 @@ rcParams["axes.grid"] = false
 rcParams["axes.facecolor"] = "0.90"
 
 fig, axes = subplots(nrows=2, ncols=2, figsize=[8, 8])
+fig.add_subplot(frameon=false)
+plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
+plt.xlabel("Proportion initially infected (%)")
+plt.ylabel("Weeks after reopening")
+
 linestyle = ["-", "--", ":"]
 titlestr = ["1 cohort", "2 cohorts (rotating)", "3 cohorts", "2 cohorts (parallel)"]
 
@@ -243,10 +247,11 @@ for (k, ax) in enumerate(axes)
     ax.yaxis.set_ticks(0:2:26)
     ax.yaxis.set_ticklabels([string.(0:2:24); ">26"])
 
+    # show grid lines for y-axis
+    ax.grid(axis="y")
+
     # set labels
     ax.set_title(titlestr[reindex[k]])
-    ax.set_xlabel("Proportion initially infected (%)")
-    ax.set_ylabel("Weeks after reopening")
 
     # panel labels
     ax.text(-0.04, 1.075, string('A'+(reindex[k]-1)), transform=ax.transAxes,
@@ -280,7 +285,7 @@ m = length(children_percent)
 n = length(children_infected)
 ```
 
-```{julia; echo=false}
+```{julia; echo=false, results="hidden"}
 # scenario parameters
 nclasses = 2
 ncohorts = 2
@@ -365,6 +370,10 @@ plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=fa
 plt.xlabel("Infected children at reopening (%)")
 plt.ylabel("Children in population (%)")
 
+# customize color map; make sure white indicates "over" value
+cmap = get_cmap("viridis_r")
+cmap.set_over("white")
+
 img = []
 for (k, ax) in enumerate(axes)
     iii = ax.contourf(children_infected, children_percent, round.(t_thresh[k] ./ 7),
@@ -372,7 +381,7 @@ for (k, ax) in enumerate(axes)
         extend="max",
         vmin=0,
         vmax=26,
-        cmap=get_cmap("viridis_r")
+        cmap=cmap
     )
     push!(img, iii)
 end
@@ -397,7 +406,7 @@ end
 
 # add color bar
 cb_ax = fig.add_axes([0.27, 0.0, 0.5, 0.02])
-cbar = fig.colorbar(img[1], cax=cb_ax, orientation="horizontal", label="weeks since reopening")#, norm=cnorm, boundaries=bounds)
+cbar = fig.colorbar(img[1], cax=cb_ax, orientation="horizontal", label="Weeks since reopening")#, norm=cnorm, boundaries=bounds)
 cbar.set_ticks(0:2:26)
 
 fig.tight_layout()
@@ -538,7 +547,7 @@ record_figure_data!(data, sol, detected_cases)
 rcParams["axes.grid"] = false
 rcParams["axes.facecolor"] = "0.90"
 
-fig, ax = subplots(figsize=[3*3.0, 2*4], nrows=4)
+fig, ax = subplots(figsize=[8.0, 8.0], nrows=4)
 
 fig.add_subplot(frameon=false)
 plt.tick_params(labelcolor="none", top=false, bottom=false, left=false, right=false)
@@ -551,8 +560,11 @@ common_xtickl = string.(Int.(common_xticks .÷ 7))
 ymin = 0.0
 ymax = 8.0
 
-##### no intervention ####
-
+#
+#   i = 1: no intervention
+#   i = 2: 100% sensitivity
+#   i = 3: 50% sensitivity
+#
 for i in eachindex(data.ts)
     # 1,1 -- infections in children
     x = data.child_detected[i]
@@ -560,32 +572,34 @@ for i in eachindex(data.ts)
     ax[1].plot(test_times[1:length(x)], x, "--", color="C$(i-1)", lw=3)
     (i > 1) && ax[1].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-    # 1,2 -- susceptible & removed in children
-    ax[2].plot(data.ts[i], data.child_susceptible[i], "-", color="C$(i-1)", lw=1.5)
+    # 1,2 -- infections in adults
+    ax[2].plot(data.ts[i], data.adult_infected[i], "-", color="C$(i-1)", lw=1.5)
+    (i > 1) && ax[2].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
-    # 2,1 -- infections in adults
-    ax[3].plot(data.ts[i], data.adult_infected[i], "-", color="C$(i-1)", lw=1.5)
+    # 2,1 -- susceptible & removed in children
+    ax[3].plot(data.ts[i], data.child_susceptible[i], "-", color="C$(i-1)", lw=1.5)
+    (i > 1) && ax[3].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 
     # 2,2 -- susceptible & removed in adults
-    ax[4].plot(data.ts[i], data.child_susceptible[i], "-", color="C$(i-1)", lw=1.5)
+    ax[4].plot(data.ts[i], data.adult_susceptible[i], "-", color="C$(i-1)", lw=1.5)
+    (i > 1) && ax[4].axvline(data.t_thresh[i], linestyle=":", color="C$(i-1)")
 end
 
 for i in eachindex(ax)
     ax[i].xaxis.set_ticks(common_xticks)
     ax[i].xaxis.set_ticklabels(common_xtickl)
-    if (i % 2 == 0)
+    if i ≥ 3
         ax[i].set_ylim(20, 105)
-        ax[i].set_yticks(20:20:100)
-    end
-    if (i % 2 == 1)
+        ax[i].set_yticks(0:20:100)
+    else
         ax[i].set_ylim(0, 10.0)
         ax[i].set_yticks(0:2:10)
     end
 end
 
 ax[1].set_title("Infections (children)")
-ax[2].set_title("Susceptibles (children)")
-ax[3].set_title("Infections (adults)")
+ax[2].set_title("Infections (adults)")
+ax[3].set_title("Susceptibles (children)")
 ax[4].set_title("Susceptibles (adults)")
 
 # add figure legend
@@ -598,8 +612,8 @@ artist_dash = plt.Line2D((0,1), (0,0), color="k", linestyle="--")
 
 fig.legend(
     (artist_c0, artist_c1, artist_c2, artist_solid, artist_dash),
-    ("no intervention", "100% detection", "50% detection", latexstring("total ", L"I(t)"), "detected"),
-    bbox_to_anchor=(0.025,-0.0,0.5,0),
+    ("no intervention", "100% detection", "50% detection", latexstring(L"I(t)", " / ", L"S(t)"), "detected"),
+    bbox_to_anchor=(0.0,-0.0,0.5,0),
     loc="lower left",
     borderaxespad=0.0,
     frameon=false,
