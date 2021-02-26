@@ -434,6 +434,12 @@ git-tree-sha1 = "c9f380c76d8aaa1fa7ea9cf97bddbc0d5b15adc2"
 uuid = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 version = "0.9.5"
 
+[[Highlights]]
+deps = ["DocStringExtensions", "InteractiveUtils", "REPL"]
+git-tree-sha1 = "f823a2d04fb233d52812c8024a6d46d9581904a4"
+uuid = "eafb193a-b7ab-5a9e-9068-77385905fa72"
+version = "0.4.5"
+
 [[Hwloc]]
 deps = ["Hwloc_jll"]
 git-tree-sha1 = "2e3d1d4ab0e7296354539b2be081f71f4b694c0b"
@@ -679,6 +685,12 @@ deps = ["DiffEqBase", "FiniteDiff", "ForwardDiff", "LinearAlgebra", "OrdinaryDif
 git-tree-sha1 = "258f3be6770fe77be8870727ba9803e236c685b8"
 uuid = "f9640e96-87f6-5992-9c3b-0743c6a49ffa"
 version = "1.8.1"
+
+[[Mustache]]
+deps = ["Printf", "Tables"]
+git-tree-sha1 = "36995ef0d532fe08119d70b2365b7b03d4e00f48"
+uuid = "ffc61752-8dc7-55ee-8c37-f3e9cdd09e70"
+version = "1.0.10"
 
 [[NLSolversBase]]
 deps = ["DiffResults", "Distributed", "FiniteDiff", "ForwardDiff"]
@@ -1210,6 +1222,12 @@ git-tree-sha1 = "2839f1c1296940218e35df0bbb220f2a79686670"
 uuid = "2381bf8a-dfd0-557d-9999-79630e7b1b91"
 version = "1.18.0+4"
 
+[[Weave]]
+deps = ["Base64", "Dates", "Highlights", "JSON", "Markdown", "Mustache", "Pkg", "Printf", "REPL", "Requires", "Serialization", "YAML"]
+git-tree-sha1 = "484f9c3b6551c005d37e860f1be167a96afbd3d8"
+uuid = "44d3d7a6-8a23-5bf8-98c5-b353f8df5ec9"
+version = "0.10.6"
+
 [[XML2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
 git-tree-sha1 = "be0db24f70aae7e2b89f2f3092e93b8606d659a6"
@@ -1347,6 +1365,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "79c31e7844f6ecf779705fbc12146eb190b7d845"
 uuid = "c5fb5394-a638-5e4d-96e5-b29de1b5cf10"
 version = "1.4.0+3"
+
+[[YAML]]
+deps = ["Base64", "Dates", "Printf"]
+git-tree-sha1 = "78c02bd295bbd0ca330f95e07ccdfcb69f6cbcd4"
+uuid = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+version = "0.4.6"
 
 [[Zlib_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
