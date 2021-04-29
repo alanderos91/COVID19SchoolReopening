@@ -240,8 +240,8 @@ fig.legend(
     ncol=3)
 fig.tight_layout()
 
-PyPlot.savefig("../figures/S7_fig.png", dpi=300, bbox_inches="tight")
-PyPlot.savefig("../figures/S7_fig.tiff", dpi=300, bbox_inches="tight")
+# PyPlot.savefig("../figures/S7_fig.png", dpi=300, bbox_inches="tight")
+# PyPlot.savefig("../figures/S7_fig.tiff", dpi=300, bbox_inches="tight")
 
 fig
 ```
